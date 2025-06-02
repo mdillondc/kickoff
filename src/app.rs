@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 use std::{cmp, process};
 
+use crate::calculator;
 use crate::config::{Config, History};
 use crate::font::Font;
 use crate::selection::{Element, ElementList};
@@ -23,6 +24,7 @@ pub struct App {
     pub history: Option<History>,
     pub last_search_result: Vec<usize>,
     pub args: Args,
+    pub calculator_result: Option<(String, f64)>, // (expression, result)
 }
 
 impl App {
@@ -43,6 +45,7 @@ impl App {
             all_entries,
             query: String::new(),
             last_search_result: Vec::new(),
+            calculator_result: None,
         };
         app.search();
 
@@ -76,15 +79,23 @@ impl App {
             self.select_input = true;
         }
     }
+    
+    fn get_total_results(&self) -> usize {
+        let calculator_count = if self.calculator_result.is_some() { 1 } else { 0 };
+        calculator_count + self.last_search_result.len()
+    }
 
     pub fn nav_down(&mut self, distance: usize) {
-        if self.select_input && !self.last_search_result.is_empty() {
-            self.select_input = false;
-            self.select_index = 0;
-        } else if !self.last_search_result.is_empty()
-            && self.select_index < self.last_search_result.len() - distance
-        {
-            self.select_index += distance;
+        if self.select_input {
+            if self.calculator_result.is_some() || !self.last_search_result.is_empty() {
+                self.select_input = false;
+                self.select_index = 0;
+            }
+        } else {
+            let total_results = self.get_total_results();
+            if self.select_index < total_results.saturating_sub(distance) {
+                self.select_index += distance;
+            }
         }
     }
 
@@ -105,6 +116,21 @@ impl App {
     }
 
     pub fn execute(&mut self) {
+        // Check if we're selecting a calculator result
+        if !self.select_input && self.calculator_result.is_some() && self.select_index == 0 {
+            if let Some((_, result)) = &self.calculator_result {
+                let result_str = calculator::format_result(*result);
+                
+                // Copy to clipboard using wl-clipboard-rs
+                use wl_clipboard_rs::copy::{MimeType, Options, Source};
+                let opts = Options::new();
+                if let Err(e) = opts.copy(Source::Bytes(result_str.as_bytes().into()), MimeType::Text) {
+                    log::error!("Failed to copy to clipboard: {}", e);
+                }
+                return;
+            }
+        }
+        
         let element = if self.select_input {
             Element {
                 name: self.query.to_string(),
@@ -112,10 +138,22 @@ impl App {
                 base_score: 0,
             }
         } else {
+            // Adjust index for calculator result
+            let actual_index = if self.calculator_result.is_some() {
+                if self.select_index == 0 {
+                    // This should have been handled above, but just in case
+                    return;
+                } else {
+                    self.select_index - 1
+                }
+            } else {
+                self.select_index
+            };
+            
             (*self
                 .all_entries
                 .as_ref_vec()
-                .get(*self.last_search_result.get(self.select_index).unwrap())
+                .get(*self.last_search_result.get(actual_index).unwrap())
                 .unwrap())
             .clone()
         };
@@ -137,11 +175,24 @@ impl App {
 
     pub fn search(&mut self) {
         self.last_search_result = Vec::new();
+        self.calculator_result = None;
+        
+        // Check if query is a math expression
+        if calculator::is_math_expression(&self.query) {
+            if let Ok(result) = calculator::evaluate(&self.query) {
+                self.calculator_result = Some((self.query.clone(), result));
+            }
+        }
+        
         let search_results = self.all_entries.search(&self.query);
 
         self.select_input = false;
         self.select_index = 0;
-        if search_results.is_empty() {
+        
+        // If we have a calculator result, start with that selected
+        if self.calculator_result.is_some() {
+            // Calculator result will be at index 0, regular results follow
+        } else if search_results.is_empty() {
             self.select_input = true;
         }
 
@@ -212,13 +263,46 @@ impl App {
             0
         };
 
+        let mut display_index = 0;
+        
+        // Display calculator result first if it exists
+        if let Some((expr, result)) = &self.calculator_result {
+            let result_str = calculator::format_result(*result);
+            let display_text = format!("{} = {}", expr, result_str);
+            let color = if display_index == self.select_index && !self.select_input {
+                &self.config.colors.text_selected
+            } else {
+                &self.config.colors.text
+            };
+            self.font.render(
+                &display_text,
+                color,
+                &mut img,
+                padding,
+                padding + spacer + display_index as u32 * (font_size * 1.2) as u32,
+                Some((width - (padding * 2)) as usize),
+            );
+            display_index += 1;
+        }
+        
+        // Display regular search results
         for (i, matched) in search_results
             .iter()
             .enumerate()
             .take(cmp::min(max_entries + offset, search_results.len()))
             .skip(offset)
         {
-            let color = if i == self.select_index && !self.select_input {
+            if display_index >= max_entries {
+                break;
+            }
+            
+            let actual_selection_index = if self.calculator_result.is_some() {
+                i + 1
+            } else {
+                i
+            };
+            
+            let color = if actual_selection_index == self.select_index && !self.select_input {
                 &self.config.colors.text_selected
             } else {
                 &self.config.colors.text
@@ -228,9 +312,10 @@ impl App {
                 color,
                 &mut img,
                 padding,
-                padding + spacer + (i - offset) as u32 * (font_size * 1.2) as u32,
+                padding + spacer + display_index as u32 * (font_size * 1.2) as u32,
                 Some((width - (padding * 2)) as usize),
             );
+            display_index += 1;
         }
 
         let elapsed = frame_draw_start.elapsed();

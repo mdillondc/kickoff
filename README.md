@@ -23,6 +23,7 @@ cargo install --path . --force
 - Argument support for launched programs
 - Paste support
 - Custom Input via stdin
+- Built-in calculator with basic arithmetic operations
 
 ## How does it search
 
@@ -40,6 +41,16 @@ Kickoff searches for applications from multiple sources to provide comprehensive
 4. **Snap packages** - Installed Snap packages discovered via `snap list` (excluding core/system snaps)
 
 5. **Settings applications** - Some applications with `NoDisplay=true` are included if they are Settings applications, making system configuration more accessible.
+
+## Calculator
+
+Kickoff includes a built-in calculator that automatically detects mathematical expressions. Simply type an arithmetic expression and see the result:
+
+- **Basic operations**: `10-5`, `2+3*4`, `(1+2)*3`
+- **Decimal numbers**: `3.14*2`, `10/3`
+- **Negative numbers**: `-5+10`, `(-2)*3`
+
+When you type a mathematical expression, the result will be displayed at the top of the results list. Press Enter while the calculator result is selected to copy the result to your clipboard.
 
 ## Configuration
 

@@ -15,6 +15,7 @@ use std::{
 use xdg::BaseDirectories;
 
 mod app;
+mod calculator;
 mod color;
 mod config;
 mod font;
