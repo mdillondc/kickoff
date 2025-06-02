@@ -7,7 +7,7 @@ use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
 };
-use std::{env, os::unix::fs::PermissionsExt};
+use std::{env, os::unix::fs::PermissionsExt, process::Command, fs};
 use tokio::{
     io::{self, AsyncBufReadExt},
     task::{spawn, spawn_blocking},
@@ -89,6 +89,9 @@ pub struct ElementListBuilder {
     from_path: bool,
     from_stdin: bool,
     from_file: Vec<PathBuf>,
+    from_snap: bool,
+    from_flatpak: bool,
+    from_desktop: bool,
 }
 
 impl ElementListBuilder {
@@ -107,6 +110,18 @@ impl ElementListBuilder {
         self.from_stdin = true;
     }
 
+    pub fn add_snap(&mut self) {
+        self.from_snap = true;
+    }
+
+    pub fn add_flatpak(&mut self) {
+        self.from_flatpak = true;
+    }
+
+    pub fn add_desktop(&mut self) {
+        self.from_desktop = true;
+    }
+
     pub async fn build(&self) -> Result<ElementList, std::io::Error> {
         let mut fut = Vec::new();
         if self.from_stdin {
@@ -119,6 +134,15 @@ impl ElementListBuilder {
         if self.from_path {
             let show_hidden = self.path_config.show_hidden_files;
             fut.push(spawn_blocking(move || Self::build_path(show_hidden)));
+        }
+        if self.from_snap {
+            fut.push(spawn_blocking(Self::build_snap));
+        }
+        if self.from_flatpak {
+            fut.push(spawn_blocking(Self::build_flatpak));
+        }
+        if self.from_desktop {
+            fut.push(spawn_blocking(Self::build_desktop));
         }
 
         let finished = futures::future::join_all(fut).await;
@@ -240,6 +264,179 @@ impl ElementListBuilder {
         }
 
         Ok(res)
+    }
+
+    fn build_snap() -> Result<Vec<Element>, std::io::Error> {
+        let output = match Command::new("snap").arg("list").output() {
+            Ok(output) => output,
+            Err(_) => return Ok(Vec::new()), // snap not available
+        };
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut res = Vec::new();
+
+        // Skip the header line
+        for line in stdout.lines().skip(1) {
+            if let Some(name) = line.split_whitespace().next() {
+                // Skip core snaps and system snaps
+                if name.starts_with("core") || name == "snapd" {
+                    continue;
+                }
+                res.push(Element {
+                    name: name.to_string(),
+                    value: name.to_string(),
+                    base_score: 0,
+                });
+            }
+        }
+
+        Ok(res)
+    }
+
+    fn build_flatpak() -> Result<Vec<Element>, std::io::Error> {
+        let output = match Command::new("flatpak")
+            .args(&["list", "--app", "--columns=application,name"])
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return Ok(Vec::new()), // flatpak not available
+        };
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut res = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 2 {
+                let app_id = parts[0].trim();
+                let display_name = parts[1].trim();
+                
+                if !app_id.is_empty() {
+                    let name = if display_name.is_empty() {
+                        // Use the app ID without the domain part as display name
+                        app_id.split('.').last().unwrap_or(app_id).to_string()
+                    } else {
+                        display_name.to_string()
+                    };
+                    
+                    res.push(Element {
+                        name,
+                        value: format!("flatpak run {}", app_id),
+                        base_score: 0,
+                    });
+                }
+            }
+        }
+
+        Ok(res)
+    }
+
+    fn build_desktop() -> Result<Vec<Element>, std::io::Error> {
+        let mut res = Vec::new();
+        
+        // Standard desktop file locations
+        let desktop_dirs = [
+            "/usr/share/applications",
+            "/usr/local/share/applications",
+            &format!("{}/.local/share/applications", env::var("HOME").unwrap_or_default()),
+        ];
+
+        for dir_path in &desktop_dirs {
+            if let Ok(entries) = fs::read_dir(dir_path) {
+                for entry in entries.flatten() {
+                    if let Some(file_name) = entry.file_name().to_str() {
+                        if file_name.ends_with(".desktop") {
+                            if let Ok(content) = fs::read_to_string(entry.path()) {
+                                if let Some(element) = Self::parse_desktop_file(&content) {
+                                    res.push(element);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove duplicates by name, keeping the first occurrence
+        res.sort_by(|a, b| a.name.cmp(&b.name));
+        res.dedup_by(|a, b| a.name == b.name);
+
+        Ok(res)
+    }
+
+    fn parse_desktop_file(content: &str) -> Option<Element> {
+        let mut name = None;
+        let mut exec = None;
+        let mut hidden = false;
+        let mut no_display = false;
+        let mut app_type = None;
+        let mut in_desktop_entry = false;
+
+        for line in content.lines() {
+            let line = line.trim();
+            
+            if line == "[Desktop Entry]" {
+                in_desktop_entry = true;
+                continue;
+            } else if line.starts_with('[') && line.ends_with(']') {
+                in_desktop_entry = false;
+                continue;
+            }
+
+            if !in_desktop_entry {
+                continue;
+            }
+
+            if let Some(equals_pos) = line.find('=') {
+                let key = &line[..equals_pos];
+                let value = &line[equals_pos + 1..];
+
+                match key {
+                    "Name" => name = Some(value.to_string()),
+                    "Exec" => exec = Some(value.to_string()),
+                    "Hidden" => hidden = value.eq_ignore_ascii_case("true"),
+                    "NoDisplay" => no_display = value.eq_ignore_ascii_case("true"),
+                    "Type" => app_type = Some(value.to_string()),
+                    _ => {}
+                }
+            }
+        }
+
+        if hidden {
+            return None;
+        }
+        
+        // Allow settings applications even if NoDisplay=true (like Cosmic settings panels)
+        let is_settings = app_type.as_ref().map_or(false, |t| t == "Settings");
+        let is_cosmic_settings = exec.as_ref().map_or(false, |e| e.contains("cosmic-settings"));
+        
+        if no_display && !is_settings && !is_cosmic_settings {
+            return None;
+        }
+
+        if let (Some(name), Some(mut exec)) = (name, exec) {
+            // Clean up exec command - remove field codes like %f, %F, %u, %U
+            exec = exec.replace("%f", "").replace("%F", "")
+                      .replace("%u", "").replace("%U", "")
+                      .replace("%i", "").replace("%c", "")
+                      .replace("%k", "").trim().to_string();
+
+            Some(Element {
+                name,
+                value: exec,
+                base_score: 0,
+            })
+        } else {
+            None
+        }
     }
 }
 

@@ -1,28 +1,17 @@
-<h1 align="center">
-  <img src="assets/logo.svg" width="300" height="300" alt="logo">
-</h1>
+Based on the original kickoff launcher [found here](https://github.com/j0ru/kickoff), this enhanced version adds support for Flatpak applications, Snap packages, and NoDisplay desktop entries to provide more comprehensive application discovery.
 
-Kickoff is heavily inspired by rofi, but not without changes made.
-Like many programs, kickoff was born from an itch that no existing program seemed to relieve and my desire to learn a lower-level programming language.
+---
 
-[![AUR version](https://img.shields.io/aur/version/kickoff?label=kickoff&logo=arch-linux&style=for-the-badge)](https://aur.archlinux.org/packages/kickoff/)
-[![Crates Version](https://img.shields.io/crates/v/kickoff?style=for-the-badge)](https://crates.io/crates/kickoff)
-
-![screenshot](assets/screenshot.png)
+Heavily inspired by rofi.
 
 ## Install
-
-#### Arch Linux
-Use your favorite AUR manager, i.e. [blinky](https://github.com/cherti/blinky/):
-
-```bash
-blinky -S kickoff
-```
 
 #### Cargo
 
 ```bash
-cargo install kickoff
+cargo clean
+cargo build --release
+cargo install --path . --force
 ```
 
 ## Features
@@ -37,18 +26,24 @@ cargo install kickoff
 
 ## How does it search
 
-All programs found in $PATH are included in the search results.
-This can include your additions to $PATH as long as they
-are done before you launch kickoff or the program that launches kickoff
-(i.e. your window manager)
+Kickoff searches for applications from multiple sources to provide comprehensive results:
 
-This list is then combined with your previous searches and sorted by the amount of usage
-and how well it fits the query.
+1. **$PATH executables** - All executable programs found in your $PATH directories. This includes your additions to $PATH as long as they are done before you launch kickoff or the program that launches kickoff (i.e. your window manager).
+
+2. **Desktop applications** - Applications with `.desktop` files from standard locations:
+   - `/usr/share/applications`
+   - `/usr/local/share/applications` 
+   - `~/.local/share/applications`
+
+3. **Flatpak applications** - Installed Flatpak apps discovered via `flatpak list --app`
+
+4. **Snap packages** - Installed Snap packages discovered via `snap list` (excluding core/system snaps)
+
+5. **Settings applications** - Some applications with `NoDisplay=true` are included if they are Settings applications, making system configuration more accessible.
 
 ## Configuration
 
-A default configuration will be placed at `$XDG_CONFIG_HOME/kickoff/config.toml`
-or can be found [here](https://github.com/j0ru/kickoff/blob/main/assets/default_config.toml).
+A default configuration will be placed at `~/.config/kickoff/config.toml`. See sample [here](https://github.com/mdillondc/kickoff/blob/main/assets/default_config.toml).
 
 ## Script integration
 
