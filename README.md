@@ -1,4 +1,4 @@
-Based on the original kickoff launcher [found here](https://github.com/j0ru/kickoff), this enhanced version adds support for Flatpak applications, Snap packages, and NoDisplay desktop entries to provide more comprehensive application discovery.
+Based on the original kickoff launcher [found here](https://github.com/j0ru/kickoff), this enhanced version adds several quality-of-life improvements (see Features below).
 
 ---
 
