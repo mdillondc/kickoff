@@ -19,6 +19,7 @@ cargo install --path . --force
 - Wayland native (only wlroots based compositors though)
 - Fuzzy search
 - Fast and snappy
+- $PATH, Flatpak, Snap and .desktop support
 - Remembers often used applications
 - Argument support for launched programs
 - Paste support
